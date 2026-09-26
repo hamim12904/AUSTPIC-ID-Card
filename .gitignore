@@ -1,0 +1,19 @@
+# Dependencies — each package installs its own
+node_modules/
+
+# Build output
+frontend/dist/
+
+# Secrets — never commit these, commit the .env.example files instead.
+# frontend/.env holds VITE_* client vars.
+# backend/.env  holds MONGODB_URI and JWT_SECRET.
+frontend/.env
+backend/.env
+.env.local
+.env.*.local
+
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/
+.idea/
