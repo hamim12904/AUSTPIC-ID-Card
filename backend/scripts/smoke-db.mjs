@@ -7,6 +7,7 @@ import mongoose from 'mongoose';
 import app from '../index.js';
 import { User } from '../models/user.js';
 import { Counter } from '../models/counter.js';
+import { isCloudinaryConfigured } from '../utils/cloudinary.js';
 
 await mongoose.connect(process.env.MONGODB_URI);
 await User.init(); // build the unique email / sparse memberId indexes first
@@ -69,6 +70,23 @@ await check('user payload has id/name/email and no password', () => {
   assert.equal(userA.email, emailA);
   assert.ok(!('password' in userA), 'password leaked in response');
   assert.ok(!JSON.stringify(userA).includes('$2'), 'hash leaked in response');
+});
+
+await check('signup allocates the member id up front, so the card needs no 2nd request', async () => {
+  assert.match(
+    userA.memberId ?? '',
+    /^PIC-2026-02-\d{4}$/,
+    `signup payload had no usable memberId: ${JSON.stringify(userA.memberId)}`
+  );
+  // It has to be persisted, not just echoed back, or a reload would lose it.
+  const raw = await mongoose.connection.collection('users').findOne({ email: emailA });
+  assert.equal(raw.memberId, userA.memberId, 'memberId in the payload is not the one in the database');
+});
+
+await check('GET /auth/me returns the same member id (re-hydrates a stale profile)', async () => {
+  const r = await call('/api/auth/me', { token: tokenA });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).user.memberId, userA.memberId);
 });
 
 await check('password is stored as a bcrypt hash, not plaintext', async () => {
@@ -204,6 +222,122 @@ await check('unknown email -> identical 401 (no user enumeration)', async () => 
   assert.equal(unknown.status, wrongPw.status);
   assert.deepEqual(await unknown.json(), await wrongPw.json());
 });
+
+console.log('\nphoto');
+
+const cloudinaryReady = isCloudinaryConfigured();
+if (!cloudinaryReady) {
+  console.log(
+    '        (no CLOUDINARY_* keys in server/.env — the storage round trip is skipped, the guards below still run)'
+  );
+}
+
+// A real 1x1 JPEG, so the multipart reader and Cloudinary are both exercised with
+// actual image bytes rather than a blob with an image content type.
+//
+// This exact byte string used to be a shorter 154-byte JPEG that began and ended
+// with the right SOI/EOI markers but was internally malformed, so Cloudinary
+// rejected it with "Invalid image file" and every photo assertion below failed
+// for a reason that had nothing to do with the code under test. The markers being
+// correct is what made it convincing. This 336-byte one decodes cleanly.
+const JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a' +
+    'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCABkAGQBAREA/8QAHwAAAQUBAQEB' +
+    'AQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1Fh' +
+    'ByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZ' +
+    'WmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXG' +
+    'x8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/APn+iiigD//Z',
+  'base64'
+);
+
+const postPhoto = (token, { type = 'image/jpeg', bytes = JPEG, filename = 'card-photo.jpg' } = {}) => {
+  const form = new FormData();
+  form.append('photo', new Blob([bytes], { type }), filename);
+  return fetch(base + '/api/members/photo', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+};
+
+await check('photo upload needs a session', async () => {
+  const r = await postPhoto(null);
+  assert.equal(r.status, 401);
+});
+
+await check('a non-image upload is rejected before it reaches Cloudinary', async () => {
+  const r = await postPhoto(tokenA, { type: 'text/plain', bytes: Buffer.from('not a photo') });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error.code, 'validation_error');
+});
+
+if (cloudinaryReady) {
+  await check('upload returns a Cloudinary url and records it on the user document', async () => {
+    const r = await postPhoto(tokenA);
+    assert.equal(r.status, 200, `upload failed: ${JSON.stringify(await r.clone().json())}`);
+    const { photo } = await r.json();
+    assert.match(photo.url, /^https:\/\/res\.cloudinary\.com\//, `not a Cloudinary url: ${photo?.url}`);
+    assert.ok(photo.publicId, 'no publicId, so a replaced photo could never be found or destroyed');
+    assert.equal(photo.width, 1200);
+    assert.equal(photo.height, 1200);
+
+    // Delivery is authenticated, so the URL is signed per response rather than
+    // stored — a persisted one would be a frozen link that can neither be
+    // re-signed nor expire. What the document keeps is the pointer, and it is
+    // the pointer, not the URL, that the response is built from.
+    const raw = await mongoose.connection.collection('users').findOne({ email: emailA });
+    assert.equal(raw.photo.publicId, photo.publicId, 'the pointer in the response is not the one in the database');
+    assert.ok(raw.photo.version, 'no version, so delivery could not be pinned to the bytes that were stored');
+    assert.equal(raw.photo.url, undefined, 'a delivery url was persisted; it must be minted per response');
+  });
+
+  // The whole point of the storage round trip: an unguessable photo that the
+  // member can load and a stranger cannot.
+  await check('the stored photo needs a signed url to be fetched at all', async () => {
+    const { photo } = await (await postPhoto(tokenA)).json();
+    const signed = await fetch(photo.url);
+    assert.equal(signed.status, 200, `the member's own signed url did not resolve: ${signed.status}`);
+    // Cloudinary serves authenticated assets with a wildcard CORS header, which
+    // is what lets the browser export (utils/domRaster.js) fetch and inline it.
+    assert.equal(signed.headers.get('access-control-allow-origin'), '*', 'no CORS header, so the card export could not read the photo');
+
+    // Take the signature off, exactly as anyone enumerating public ids would.
+    const stripped = photo.url.replace(/\/s--[^/]+\//, '/');
+    const unsigned = await fetch(stripped);
+    assert.notEqual(unsigned.status, 200, 'the photo was served with the signature removed');
+  });
+
+  await check('the photo rides back in the auth payload, so a reload re-hydrates it', async () => {
+    const me = await (await call('/api/auth/me', { token: tokenA })).json();
+    assert.match(me.user.photo?.url ?? '', /^https:\/\/res\.cloudinary\.com\//);
+  });
+
+  await check('a second upload replaces the asset instead of adding one', async () => {
+    const first = await (await postPhoto(tokenA)).json();
+    const second = await (await postPhoto(tokenA)).json();
+    assert.equal(second.photo.publicId, first.photo.publicId, 'the public id changed, so the old asset was orphaned');
+  });
+
+  await check('each member\'s photo is filed under their own user id, so neither can touch the other\'s', async () => {
+    const bob = await (
+      await call('/api/auth/login', { method: 'POST', body: { email: emailB, password: 'secret123' } })
+    ).json();
+    await postPhoto(bob.token);
+    for (const email of [emailA, emailB]) {
+      const stored = await mongoose.connection.collection('users').findOne({ email });
+      assert.ok(
+        stored.photo.publicId.includes(stored._id.toString()),
+        `${email}'s photo is filed under ${stored.photo.publicId}`
+      );
+    }
+  });
+} else {
+  await check('without keys the endpoint answers 503, never a 500', async () => {
+    const r = await postPhoto(tokenA);
+    assert.equal(r.status, 503);
+    assert.equal((await r.json()).error.code, 'photo_upload_unavailable');
+  });
+}
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 

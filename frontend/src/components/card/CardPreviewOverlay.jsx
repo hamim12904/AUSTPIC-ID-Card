@@ -1,23 +1,51 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
+import { useCardStore } from '../../store/useCardStore.js';
+import { downloadCardPdf, downloadCardPng } from '../../utils/cardExport.js';
 import FlipController from './FlipController.jsx';
 import IDCardFront from './IDCardFront.jsx';
 import IDCardBack from './IDCardBack.jsx';
 import ProgressDots from './ProgressDots.jsx';
+import CardActionButton from '../ui/CardActionButton.jsx';
+import { DownloadIcon } from '../ui/CardIcons.jsx';
 
 /**
- * Modal shown from "Preview". Only ever mounted once every field on both
- * sides has passed validation (see IDCardShell's handlePreview), so it never
- * needs its own empty-state handling.
+ * Modal shown from the preview action. Only ever mounted once every field on
+ * both sides has passed validation (see IDCardShell's revealMissingFields), so
+ * it never needs its own empty-state handling.
  *
- * Renders the card in read-only mode (see FieldOverlay/CardSelect) so what
- * the person sees here — plain baked-in text, no dropdown caret, no inputs —
- * matches the card that actually gets generated. Submitting from here reuses
- * the same onGenerate flow the old single "Generate card" button used.
+ * Renders the card in read-only mode (see FieldOverlay) so what the person
+ * sees here — plain baked-in text, no dropdown caret, no inputs — is card
+ * content rather than UI.
+ *
+ * The two face elements are held by ref because the download rasterises these
+ * exact nodes (utils/domRaster.js) instead of rebuilding the card on a canvas.
+ * That is what makes a file match this modal: the export is this rendering at
+ * full resolution, so there is no second implementation of the layout to fall
+ * out of step with the first.
  */
 export default function CardPreviewOverlay({ template, onClose, onSubmit, submitting }) {
   const [side, setSide] = useState('front');
+  // 'png' | 'pdf' | null — which export is being built, so its own button can
+  // show progress while the other stays visibly idle.
+  const [exporting, setExporting] = useState(null);
+  const [exportError, setExportError] = useState(null);
+
+  const fields = useCardStore((s) => s.fields);
+  const photo = useCardStore((s) => s.photo);
+
+  // The nodes the download paints. Both faces are mounted (the flip is a 3D
+  // transform, not a conditional), so both are available whichever side is
+  // showing and the PDF can rasterise each in turn.
+  const frontNodeRef = useRef(null);
+  const backNodeRef = useRef(null);
+
+  // The cropped local render is preferred over the server's copy: it is already
+  // square, which is what the picture slot expects.
+  const photoUrl = photo.processedUrl || photo.previewUrl;
+
+  const flip = () => setSide((current) => (current === 'front' ? 'back' : 'front'));
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -27,7 +55,38 @@ export default function CardPreviewOverlay({ template, onClose, onSubmit, submit
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
+  const runExport = async (kind) => {
+    setExporting(kind);
+    setExportError(null);
+    try {
+      if (kind === 'png') {
+        await downloadCardPng({
+          node: side === 'front' ? frontNodeRef.current : backNodeRef.current,
+          template,
+          side,
+          fields,
+          photoUrl,
+        });
+      } else {
+        await downloadCardPdf({
+          frontNode: frontNodeRef.current,
+          backNode: backNodeRef.current,
+          template,
+          fields,
+          photoUrl,
+        });
+      }
+    } catch (err) {
+      console.error(`[CardPreviewOverlay] ${kind} export failed:`, err);
+      setExportError(err?.message || 'Could not build the download. Please try again.');
+    } finally {
+      setExporting(null);
+    }
+  };
+
   if (typeof document === 'undefined') return null;
+
+  const nextSide = side === 'front' ? 'back' : 'front';
 
   return createPortal(
     <motion.div
@@ -49,45 +108,82 @@ export default function CardPreviewOverlay({ template, onClose, onSubmit, submit
         aria-label="Preview your AUST PIC ID card"
       >
         <p className="font-body text-xs font-semibold uppercase tracking-wide text-ink/45">
-          Preview — this is exactly what gets generated
+          ID Card Preview
         </p>
 
-        <div className="id-card-surface pointer-events-none mt-4">
+        {/* Double-click turns the card over here too, matching the editor. Safe
+            because read-only mode has nothing to select or drag: the fields
+            are plain text and the photo slot is a div, not a file input. */}
+        <div
+          className="id-card-surface card-preview-card mt-4"
+          onDoubleClick={flip}
+          role="button"
+          tabIndex={0}
+          aria-label={`Card ${side}. Activate, or double-click, to see the ${nextSide}.`}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              flip();
+            }
+          }}
+        >
           <FlipController flipped={side === 'back'}>
-            <IDCardFront template={template} readOnly />
-            <IDCardBack template={template} readOnly />
+            <IDCardFront template={template} readOnly ref={frontNodeRef} />
+            <IDCardBack template={template} readOnly ref={backNodeRef} />
           </FlipController>
         </div>
 
-        <div className="mt-6 flex w-full flex-col items-center gap-4">
-          <ProgressDots current={side} />
-          <div className="flex flex-wrap items-center justify-center gap-3">
+        <div className="mt-4 flex w-full flex-col items-center gap-4">
+          {/* The side switch. The card turns over on double-click, but that is
+              a hidden gesture, so the switch is also a control — which is why
+              there is no separate Flip button competing with the downloads. */}
+          <ProgressDots current={side} onSelect={setSide} />
+
+          {/* Downloads: the reason to be in this modal, so they get their own
+              row of two equal halves, both edges matching the row below. */}
+          <div className="card-preview-downloads">
             <button
               type="button"
-              onClick={() => setSide((s) => (s === 'front' ? 'back' : 'front'))}
-              className="rounded-full border border-ink/15 bg-white/70 px-5 py-2.5 font-body text-sm font-medium text-ink transition hover:border-teal-light hover:bg-white"
+              className="card-download-btn"
+              onClick={() => runExport('png')}
+              disabled={Boolean(exporting) || submitting}
             >
-              <span aria-hidden="true" className="mr-2 inline-block text-base">↻</span>
-              Flip to {side === 'front' ? 'back' : 'front'}
+              <DownloadIcon />
+              {exporting === 'png' ? 'Preparing PNG…' : `PNG · ${side}`}
             </button>
             <button
               type="button"
-              onClick={onClose}
-              className="rounded-full px-5 py-2.5 font-body text-sm font-medium text-ink/60 underline"
+              className="card-download-btn"
+              onClick={() => runExport('pdf')}
+              disabled={Boolean(exporting) || submitting}
             >
-              Back to edit
-            </button>
-            <button
-              type="button"
-              onClick={onSubmit}
-              disabled={submitting}
-              data-generate-trigger
-              className="btn-green rounded-full px-6 py-2.5 font-body text-sm font-medium disabled:opacity-60"
-            >
-              {submitting ? 'Submitting…' : 'Submit'}
+              <DownloadIcon />
+              {exporting === 'pdf' ? 'Preparing PDF…' : 'PDF · both sides'}
             </button>
           </div>
+
+          {exportError && (
+            <p
+              className="w-full rounded-2xl border border-red-200 bg-white/80 px-4 py-2.5 text-left font-body text-xs text-red-500"
+              role="alert"
+            >
+              {exportError}
+            </p>
+          )}
+
+          {/* The decision, and only the decision: one button each way, pushed to
+              opposite ends so the row reads as a choice rather than a set of
+              peers. Submit's right edge lines up with the PDF button's. */}
+          <div className="card-preview-actions">
+            <CardActionButton shape="quiet" onClick={onClose}>
+              Back to edit
+            </CardActionButton>
+            <CardActionButton tone="solid" onClick={onSubmit} disabled={submitting}>
+              {submitting ? 'Submitting…' : 'Submit'}
+            </CardActionButton>
+          </div>
         </div>
+
       </motion.div>
     </motion.div>,
     document.body

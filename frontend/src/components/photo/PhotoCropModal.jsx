@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import Cropper from 'react-easy-crop';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCardStore } from '../../store/useCardStore.js';
-import { uploadPhoto } from '../../api/submissionApi.js';
+import { uploadMyPhoto } from '../../api/memberApi.js';
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -15,11 +15,15 @@ function loadImage(src) {
 
 /**
  * Bakes the crop the user actually made — pan AND zoom — into a bitmap, so the
- * card preview matches what the backend builds from cropRect. croppedAreaPixels
- * is already expressed in natural image pixels and accounts for zoom, so it can
- * be used directly as the source rectangle.
+ * card preview matches what gets stored. croppedAreaPixels is already expressed
+ * in natural image pixels and accounts for zoom, so it can be used directly as
+ * the source rectangle.
+ *
+ * Returns the canvas rather than a finished image because it is read twice: once
+ * as the instant local preview and once as the file to upload, and re-running
+ * the crop for the second would be a second draw of the same pixels.
  */
-async function cropToDataUrl(src, area, size) {
+async function renderCrop(src, area, size) {
   const img = await loadImage(src);
 
   // Clamp to the image. react-easy-crop can report a rect that runs past the
@@ -41,8 +45,31 @@ async function cropToDataUrl(src, area, size) {
   ctx.fillRect(0, 0, size, size);
 
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, size, size);
-  return canvas.toDataURL('image/jpeg', 0.92);
+  return canvas;
 }
+
+/** The canvas as an uploadable file. A Blob, not a data URL: base64 adds a third
+ *  to the bytes on the wire, and this is the same picture the slot already has. */
+function toBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('Could not read the cropped image.'))),
+      'image/jpeg',
+      0.92
+    );
+  });
+}
+
+/**
+ * The square the crop is rendered at, in pixels.
+ *
+ * Matches PHOTO_TRANSFORMATION in backend/utils/cloudinary.js. The card's
+ * picture slot is a circle about a fifth of a 2214px-wide card, so 1200 is
+ * comfortably above what the export ever asks of it — and matching the stored
+ * size exactly means the pixels the member chose are the pixels that get kept,
+ * with no resampling in between.
+ */
+const CROP_SIZE = 1200;
 
 export default function PhotoCropModal({ file, imageUrl, shape, onClose }) {
   const [crop, setCrop] = useState({ x: 0, y: 0 });
@@ -50,7 +77,6 @@ export default function PhotoCropModal({ file, imageUrl, shape, onClose }) {
   const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const submissionId = useCardStore((s) => s.submissionId);
   const setPhoto = useCardStore((s) => s.setPhoto);
 
   const onCropComplete = useCallback((_, areaPixels) => {
@@ -64,23 +90,34 @@ export default function PhotoCropModal({ file, imageUrl, shape, onClose }) {
     // Never leave the slot empty: if the local render fails for any reason,
     // fall back to the raw file so the user still sees their own picture.
     let previewUrl = imageUrl;
+    let canvas = null;
     try {
-      previewUrl = await cropToDataUrl(imageUrl, croppedAreaPixels, 900);
+      canvas = await renderCrop(imageUrl, croppedAreaPixels, CROP_SIZE);
+      previewUrl = canvas.toDataURL('image/jpeg', 0.92);
     } catch (err) {
       console.warn('[PhotoCropModal] local crop render failed, using uncropped file:', err);
     }
 
-    setPhoto({ file, cropRect: croppedAreaPixels, previewUrl, processedUrl: null });
+    setPhoto({ file, cropRect: croppedAreaPixels, previewUrl, processedUrl: null, status: 'uploading', error: null });
 
-    // If there's no submission yet (frontend-only dev, backend not reachable),
-    // just keep the local preview and skip the network call.
-    if (submissionId) {
+    // Store the picture the member actually chose. Sending the cropped bitmap
+    // rather than the raw file is what makes the stored image and the card
+    // identical; Cloudinary then re-encodes it into the card's square slot
+    // (backend/utils/cloudinary.js) and the user document keeps only the URL.
+    //
+    // A failure is not fatal to the card: the local crop stays in the slot, the
+    // member can still download their card, and picking a new photo retries.
+    if (canvas) {
       try {
-        const { processedPhotoUrl } = await uploadPhoto(submissionId, file, croppedAreaPixels);
-        setPhoto({ processedUrl: processedPhotoUrl });
+        const blob = await toBlob(canvas);
+        const photo = await uploadMyPhoto(blob);
+        setPhoto({ processedUrl: photo.url, status: 'ready', error: null });
       } catch (err) {
-        console.warn('[PhotoCropModal] upload failed, keeping local preview only:', err);
+        console.warn('[PhotoCropModal] photo upload failed, keeping local preview only:', err);
+        setPhoto({ status: 'error', error: err?.message || 'Your photo could not be uploaded.' });
       }
+    } else {
+      setPhoto({ status: 'error', error: 'That image could not be read. Try choosing it again.' });
     }
 
     setSaving(false);

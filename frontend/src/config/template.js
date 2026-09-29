@@ -59,9 +59,13 @@ export const template = {
       label: 'Full name',
       placeholder: 'Enter full name',
       x: 15.3,
-      y: 53.8,
+      // Box grown 10px taller (h 5 -> 6.5, since the card is 667px tall at the
+      // 420px reference width) to go with the larger type. Grown about the old
+      // centre — 56.3 — rather than downward, so the name itself does not shift
+      // and the vertical alignment already tuned on this card is left alone.
+      y: 53.05,
       w: 69.4,
-      h: 5,
+      h: 6.5,
       // Bigger than the back's matching field (see FieldOverlay's
       // getFieldSize) — this is the card's headline, so it gets its own,
       // larger cap.
@@ -74,13 +78,22 @@ export const template = {
       maxLength: 30,
       required: true,
       uppercase: true,
+      // The headline, and the field most likely to be too long for its box: 30
+      // uppercase characters will not fit at 60. Steps the type down until it
+      // does, in the editor, the preview and the export alike.
+      fit: true,
     },
     {
       key: 'studentId',
       label: 'Student ID',
       placeholder: 'Enter student ID',
+      // Sat a couple of pixels below the printed "Student ID:", so nudged until it
+      // matched: -2.5px, -3px, then +1px, leaving it 4.5px above where it
+      // started. Geometry is a percentage of card height, and the card is 667px
+      // tall at the 420px reference width, so 1px is 0.15 points. Reading it from
+      // field.y is what moves the editor, the preview and the export together.
+      y: 68.93,
       x: 42,
-      y: 69.6,
       w: 50,
       h: 3.6,
       labelHitWidth: 24,
@@ -97,7 +110,10 @@ export const template = {
       label: 'Department',
       placeholder: 'Select department',
       x: 42,
-      y: 73.75,
+      // Nudged to match the printed "Department:" alongside studentId: -2.75px,
+      // -3px, then +1px, leaving it 4.75px above where it started. 0.15 points
+      // is 1px at the 420px reference width, where the card is 667px tall.
+      y: 73.3,
       w: 50,
       h: 3.6,
       labelHitWidth: 24,
@@ -118,7 +134,9 @@ export const template = {
       label: 'Blood group',
       placeholder: 'Select blood group',
       x: 42,
-      y: 77.9,
+      // Lifted 3px (0.45 points) with the rest of this column, to match the
+      // printed "Blood group:".
+      y: 77.45,
       w: 50,
       h: 3.6,
       labelHitWidth: 24,
@@ -136,7 +154,10 @@ export const template = {
       label: 'Contact',
       placeholder: 'Enter contact',
       x: 42,
-      y: 82.05,
+      // Lifted 2px (0.30 points at the 420px reference width, where the card is
+      // 667px tall) onto the printed "Contact:", which puts it back in line with
+      // the rest of this column. It had been dropped 1.5px the other way.
+      y: 81.97,
       w: 50,
       h: 3.6,
       labelHitWidth: 24,
@@ -157,9 +178,12 @@ export const template = {
       label: 'Full name',
       placeholder: 'Enter full name',
       x: 15.3,
-      y: 39.5,
+      // Same +10px on the box, again about the old centre (42.0) so the text
+      // stays put. It cannot be grown downward here: memberId starts at 46, so
+      // h 6.5 from y 39.5 would butt the two boxes together.
+      y: 38.75,
       w: 69.4,
-      h: 5,
+      h: 6.5,
       fontSize: 50,
       fontFamily: '"Poppins", sans-serif',
       fontWeight: 700,
@@ -169,11 +193,20 @@ export const template = {
       maxLength: 30,
       required: true,
       uppercase: true,
+      // Same shrinking fit as the front, measured against this side's own box.
+      fit: true,
     },
     {
       key: 'memberId',
       label: 'Member ID',
-      placeholder: 'Enter member ID',
+      // Never typed. The server allocates it (GET /api/members/next-id, first
+      // id PIC-2026-02-0001) and persists it on the user document, so
+      // FieldOverlay renders this as baked-in text with no input. An editable
+      // box would let a member hand in a card claiming an id that isn't theirs,
+      // and would desync the card from the one in the database. autoHint stands
+      // in until the value lands, so the field is never a silent blank.
+      readOnly: true,
+      autoHint: 'Assigning…',
       // x was 34 — that's exactly where the printed colon sits (measured at
       // 34.0%–34.4% of the card width), so typed text started on top of the
       // colon instead of after it. 35.3 clears it with the same ~0.9% gap
@@ -213,15 +246,32 @@ export const template = {
       label: 'Email',
       placeholder: 'Enter email address',
       x: 35.3,
-      y: 57.5,
+      // h 4 -> 4.5 for the second line. Both the fitter and the export read this
+      // as "how many lines fit", and at h 4 the box held exactly one, so
+      // multiline alone would still have been capped at a single line.
+      //
+      // y 57.5 -> 58.17, so the value sits 4.5px below where it started: +1.5px,
+      // then +5px, then -2px. The box is top-aligned (see FieldOverlay), so its
+      // first line sits on y directly and this moves the text without touching
+      // where a wrapped second line lands. 0.30 points is 2px at the 420px
+      // reference width, where the card is 667px tall. The box grew downward
+      // rather than upward because the address box above ends exactly at 57.5.
+      y: 58.17,
+      h: 4.5,
       w: 56.7,
-      h: 4,
       fontSize: 18,
       fontFamily: '"Poppins", sans-serif',
       fontWeight: 500,
       color: '#0c2f38',
       align: 'left',
       maxLength: 60,
+      // An address has no spaces to break on, so a long one used to run past
+      // the right edge of the field. Wrapping to a second line keeps it inside,
+      // and `fit` guarantees it needs no third: the fitter steps the type down
+      // until the whole address is two lines, and it never widens a line past
+      // the box, so it cannot exceed the right-hand side either.
+      multiline: true,
+      fit: true,
       required: true,
     },
     {
@@ -229,7 +279,11 @@ export const template = {
       label: 'Blood group',
       placeholder: 'Select blood group',
       x: 35.3,
-      y: 63,
+      // Lifted 2px (0.30 points) onto the printed "Blood group:". Unlike the
+      // front's, this box is centred in its height rather than top-aligned, so
+      // moving y moves the text by half the nudge — the whole 0.30 is the gap
+      // being closed either way.
+      y: 62.7,
       w: 56.7,
       h: 4,
       fontSize: 18,

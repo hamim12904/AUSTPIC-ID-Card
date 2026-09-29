@@ -8,6 +8,7 @@ import mongoose from 'mongoose';
 import authRoutes from './routes/authRoutes.js';
 import memberRoutes from './routes/memberRoutes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { missingCloudinaryVars } from './utils/cloudinary.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,6 +32,21 @@ if (!JWT_SECRET) {
 if (!MONGODB_URI) {
   console.error('[server] Refusing to start: MONGODB_URI is not set in server/.env');
   process.exit(1);
+}
+
+// Member photos need Cloudinary keys. This is the one piece of configuration the
+// server can start without — the card is fully usable, the member just cannot
+// attach a picture — so it is a warning in development and a hard stop in
+// production, where a silent "photo upload is off" is much worse than a refusal
+// to boot. The endpoint answers 503 while it is unset (see controller/photoController.js).
+const missingCloudinary = missingCloudinaryVars();
+if (missingCloudinary.length) {
+  const hint = `Add ${missingCloudinary.join(', ')} to server/.env (Cloudinary dashboard -> API keys)`;
+  if (isProd) {
+    console.error(`[server] Refusing to start: Cloudinary is not configured. ${hint}`);
+    process.exit(1);
+  }
+  console.warn(`[server] WARNING: photo upload is disabled. ${hint}`);
 }
 
 const app = express();

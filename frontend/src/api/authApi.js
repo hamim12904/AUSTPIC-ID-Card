@@ -13,3 +13,12 @@ export async function signupRequest(payload) {
   const { data } = await client.post('/auth/signup', payload);
   return data;
 }
+
+// GET /api/auth/me -> { user }. Re-reads the profile from the database, so a
+// cached copy in localStorage can't go stale — notably for memberId, which the
+// server allocates and which therefore isn't in a profile stored before the
+// member had one.
+export async function fetchMe() {
+  const { data } = await client.get('/auth/me');
+  return data.user;
+}

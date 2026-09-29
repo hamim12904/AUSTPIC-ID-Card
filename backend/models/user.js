@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { BLOOD_GROUPS, DEPARTMENTS } from '../utils/constants.js';
+import { signedPhotoUrl } from '../utils/cloudinary.js';
 
 const SALT_ROUNDS = 12;
 
@@ -34,6 +35,34 @@ const userSchema = new mongoose.Schema(
     bloodGroup: { type: String, trim: true, enum: BLOOD_GROUPS },
     contact: { type: String, trim: true, maxlength: 20 },
     address: { type: String, trim: true, maxlength: 140 },
+
+    // The member's card photo, as a pointer to the image stored in Cloudinary
+    // (utils/cloudinary.js) — never the bytes, which would put a megabyte into
+    // every document that reads this one and into every auth response that
+    // serialises it. publicId is the only reliable handle on the asset: a
+    // transformed URL changes with every width or format, so it cannot be used
+    // to find or destroy the original, and uploads are keyed on it so that
+    // replacing a photo overwrites rather than orphans.
+    //
+    // version is stored alongside it for the same reason: it pins delivery to
+    // the exact bytes that were uploaded, so a replaced photo is not served
+    // from a stale cache entry.
+    //
+    // There is deliberately NO url field. Delivery is authenticated
+    // (PHOTO_TYPE), so the URL is signed per member and may expire; persisting
+    // one would hand out a frozen link. toJSON below mints a fresh one.
+    //
+    // No default: a member with no photo simply has no field here, and it rides
+    // back inside the user payload for free, so the card re-hydrates on reload
+    // without a second request.
+    photo: {
+      publicId: { type: String, trim: true },
+      version: { type: Number },
+      width: { type: Number },
+      height: { type: Number },
+      bytes: { type: Number },
+      uploadedAt: { type: Date },
+    },
   },
   {
     timestamps: true,
@@ -44,6 +73,13 @@ const userSchema = new mongoose.Schema(
         delete ret._id;
         delete ret.__v;
         delete ret.password;
+        // The one place a member's photo is turned into a fetchable URL, for
+        // every response that carries a user. Doing it here rather than in each
+        // controller is what guarantees there is no route that can accidentally
+        // ship a member's picture over an unauthenticated link.
+        if (ret.photo?.publicId) {
+          ret.photo = { ...ret.photo, url: signedPhotoUrl(ret.photo.publicId, ret.photo.version) };
+        }
         return ret;
       },
     },

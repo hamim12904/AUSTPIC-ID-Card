@@ -8,7 +8,12 @@ export function validateField(value, fieldDef) {
   const trimmed = (value ?? '').toString().trim();
 
   if (fieldDef.required && trimmed.length === 0) {
-    return 'This field is required.';
+    // A readOnly field has no box to type into, so "This field is required"
+    // would send the member looking for an input that doesn't exist. It should
+    // only ever be empty if the allocation request failed, so say that.
+    return fieldDef.readOnly
+      ? 'Your member ID is assigned automatically. Refresh the page if this stays empty.'
+      : 'This field is required.';
   }
   if (fieldDef.maxLength && trimmed.length > fieldDef.maxLength) {
     return `Keep it under ${fieldDef.maxLength} characters.`;

@@ -5,8 +5,15 @@ import { isSideValid, validateSide } from '../../utils/validation.js';
 import FlipController from './FlipController.jsx';
 import IDCardFront from './IDCardFront.jsx';
 import IDCardBack from './IDCardBack.jsx';
+import CardActionBar from './CardActionBar.jsx';
 import ProgressDots from './ProgressDots.jsx';
 import CardPreviewOverlay from './CardPreviewOverlay.jsx';
+
+// A double-click that lands on one of the card's own controls is left to the
+// browser: double-clicking a field selects a word, and double-clicking the
+// photo slot opens the picker. Everywhere else on the card, a double-click
+// turns it over.
+const CARD_CONTROL_SELECTOR = '[data-card-input], button, textarea';
 
 // "3D feel" on the card: on mouse, the tilt follows the cursor continuously
 // while hovering (a classic tilt-card effect); on touch, tapping tilts it
@@ -24,7 +31,7 @@ function useCardTilt() {
   const springRotateY = useSpring(rotateY, rotateSpring);
   const springScale = useSpring(pressScale, { stiffness: 350, damping: 34 });
 
-  const MAX_TILT_DEG = 1.5; // was 6 — even more subtle
+  const MAX_TILT_DEG = 1.75; // was 6 — even more subtle
 
   const applyTiltFromEvent = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -96,10 +103,17 @@ export default function IDCardShell({ template, onGenerate, scale, opacity }) {
   const backValid = isSideValid(template.backFields, fields);
   const activeErrors = currentSide === 'front' ? frontErrors : backErrors;
   const shouldShowErrors = triedNext[currentSide];
-  // Gate for Preview: every field on both sides has to validate before the
-  // person can see the (read-only) card, matching the "fill everything
-  // first" requirement.
+  // Gate for preview and submit: every field on both sides has to validate
+  // before the card can be previewed or handed in, matching the "fill
+  // everything first" requirement.
   const allValid = frontValid && backValid;
+
+  // The member id is the one field the member can't type, so a failed
+  // allocation would otherwise block Generate with nothing on screen saying
+  // why. Surface it, with a retry, the moment the request fails.
+  const memberIdStatus = useCardStore((s) => s.memberIdStatus);
+  const retryMemberId = useCardStore((s) => s.retryMemberId);
+  const memberIdFailed = memberIdStatus === 'error';
 
   useEffect(() => {
     if (status === 'idle') {
@@ -107,22 +121,31 @@ export default function IDCardShell({ template, onGenerate, scale, opacity }) {
     }
   }, [status]);
 
-  const handlePreviewClick = () => {
+  /**
+   * Shared by preview and submit: when the card is not finished, turn to the
+   * side that is missing something and list what it is, rather than opening
+   * anything. Returns true when there was a problem to show.
+   */
+  const revealMissingFields = () => {
     const nextTried = {
       front: !frontValid,
       back: !backValid,
     };
 
-    if (nextTried.front || nextTried.back) {
-      setTriedNext(nextTried);
-      setSide(nextTried.front ? 'front' : 'back');
-      return;
-    }
+    if (!nextTried.front && !nextTried.back) return false;
 
+    setTriedNext(nextTried);
+    setSide(nextTried.front ? 'front' : 'back');
+    return true;
+  };
+
+  const handlePreviewClick = () => {
+    if (revealMissingFields()) return;
     setPreviewOpen(true);
   };
 
-  const handleSubmit = () => {
+  const handleSubmitClick = () => {
+    if (revealMissingFields()) return;
     setPreviewOpen(false);
     onGenerate();
   };
@@ -136,8 +159,12 @@ export default function IDCardShell({ template, onGenerate, scale, opacity }) {
         tabIndex={0}
         role="group"
         aria-label="Interactive AUST PIC ID card"
+        onDoubleClick={(event) => {
+          if (event.target.closest?.(CARD_CONTROL_SELECTOR)) return;
+          flipSide();
+        }}
         onKeyDown={(event) => {
-          if (event.key.toLowerCase() === 'f' && event.target.tagName !== 'INPUT' && event.target.tagName !== 'TEXTAREA' && event.target.tagName !== 'SELECT') {
+          if (event.key.toLowerCase() === 'f' && !event.target.closest?.(CARD_CONTROL_SELECTOR)) {
             flipSide();
           }
         }}
@@ -156,29 +183,21 @@ export default function IDCardShell({ template, onGenerate, scale, opacity }) {
       <div className="mt-7 flex w-full max-w-[520px] flex-col items-center gap-4">
         <ProgressDots current={currentSide} />
         <p className="text-center font-body text-xs text-ink/50">
-          {currentSide === 'front' ? 'Fill the front fields directly on the card.' : 'Fill the back fields directly on the card.'}
+          {currentSide === 'front'
+            ? 'Fill the front fields directly on the card.'
+            : 'Fill the back fields directly on the card. Your member ID is assigned automatically.'}
         </p>
-        <div className="flex flex-wrap items-center justify-center gap-3">
-          <button
-            type="button"
-            onClick={flipSide}
-            className="rounded-full border border-ink/15 bg-white/70 px-5 py-2.5 font-body text-sm font-medium text-ink transition hover:border-teal-light hover:bg-white"
-          >
-            <span aria-hidden="true" className="mr-2 inline-block text-base">↻</span>
-            Flip to {currentSide === 'front' ? 'back' : 'front'}
-          </button>
-          <button
-            type="button"
-            onClick={handlePreviewClick}
-            className={`rounded-full px-6 py-2.5 font-body text-sm font-medium transition ${
-              allValid
-                ? 'btn-green'
-                : 'border border-ink/15 bg-white/70 text-ink/50 hover:border-teal-light hover:bg-white'
-            }`}
-          >
-            {allValid ? 'Preview' : 'Preview (fill all fields)'}
-          </button>
-        </div>
+        <p className="-mt-2 text-center font-body text-[11px] text-ink/35">
+          Double-click the card to turn it over.
+        </p>
+        <CardActionBar
+          currentSide={currentSide}
+          ready={allValid}
+          submitting={status === 'submitting'}
+          onFlip={flipSide}
+          onPreview={handlePreviewClick}
+          onSubmit={handleSubmitClick}
+        />
         {shouldShowErrors && Object.keys(activeErrors).length > 0 && (
           <div className="w-full rounded-2xl border border-red-200 bg-white/80 px-4 py-3 text-left" role="alert">
             <p className="font-body text-xs font-semibold text-red-500">Complete the highlighted fields first.</p>
@@ -189,6 +208,23 @@ export default function IDCardShell({ template, onGenerate, scale, opacity }) {
             </ul>
           </div>
         )}
+        {memberIdFailed && (
+          <div className="w-full rounded-2xl border border-red-200 bg-white/80 px-4 py-3 text-left" role="alert">
+            <p className="font-body text-xs font-semibold text-red-500">
+              Couldn't assign your member ID.
+            </p>
+            <p className="mt-1 font-body text-[11px] text-red-500/90">
+              It's generated for you, so it can't be typed in. Check your connection and try again.
+            </p>
+            <button
+              type="button"
+              onClick={retryMemberId}
+              className="mt-2 rounded-full border border-red-200 px-3 py-1 font-body text-[11px] text-red-500 transition-colors hover:bg-red-50"
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
       <AnimatePresence>
@@ -196,7 +232,7 @@ export default function IDCardShell({ template, onGenerate, scale, opacity }) {
           <CardPreviewOverlay
             template={template}
             onClose={() => setPreviewOpen(false)}
-            onSubmit={handleSubmit}
+            onSubmit={handleSubmitClick}
             submitting={status === 'submitting'}
           />
         )}

@@ -1,8 +1,12 @@
+import { forwardRef } from 'react';
 import FieldOverlay from './FieldOverlay.jsx';
 
-export default function IDCardBack({ template, showErrors, readOnly = false }) {
+// Ref lands on the face element for the download, as on the front. The export
+// also clears the .card-back rotateY(180deg) on its clone, which only exists
+// so both faces can share one 3D context. See utils/domRaster.js.
+const IDCardBack = forwardRef(function IDCardBack({ template, showErrors, readOnly = false }, ref) {
   return (
-    <div className="card-face card-back" style={{ containerType: 'inline-size' }}>
+    <div className="card-face card-back" style={{ containerType: 'inline-size' }} ref={ref}>
       <div className="relative h-full w-full">
         <img
           src={template.backImage}
@@ -22,4 +26,6 @@ export default function IDCardBack({ template, showErrors, readOnly = false }) {
       </div>
     </div>
   );
-}
+});
+
+export default IDCardBack;

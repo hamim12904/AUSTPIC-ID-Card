@@ -1,4 +1,4 @@
-@tailwind base;
+﻿@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -33,7 +33,7 @@
     scroll-behavior: smooth;
     /* The button halo is allowed to blur outside its own box. Without this it
        can push the document wider than the viewport, a horizontal scrollbar
-       appears, the usable width shrinks and every centred flex row reflows —
+       appears, the usable width shrinks and every centred flex row reflows â€”
        which reads as the neighbouring buttons resizing on hover. `clip` rather
        than `hidden` so it does not turn <html> into a scroll container and
        break smooth scrolling. */
@@ -152,8 +152,11 @@
   transition: border-color 180ms ease, background-color 180ms ease;
 }
 
-.photo-upload-zone:hover,
-.photo-upload-zone:focus-visible {
+/* Scoped to the button: in read-only mode the preview renders the slot as a
+   plain div (so it cannot open a file picker), and a div must not light up with
+   the dashed upload affordance on hover. */
+button.photo-upload-zone:hover,
+button.photo-upload-zone:focus-visible {
   border-color: rgba(123, 196, 189, 0.95);
   background: rgba(123, 196, 189, 0.1);
   outline: none;
@@ -199,30 +202,80 @@
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
-.photo-upload-zone:hover .photo-upload-label,
-.photo-upload-zone:focus-visible .photo-upload-label {
-  opacity: 1;
-  transform: translateY(0);
-}
+  button.photo-upload-zone:hover .photo-upload-label,
+  button.photo-upload-zone:focus-visible .photo-upload-label {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* A photo that failed to store. Always visible (not a hover affordance like
+     the label above) and red rather than teal, because unlike the label it is
+     reporting a failure the member has to act on. Sits below the slot so it
+     never covers the picture it is about. */
+  .photo-upload-error {
+    color: #b3402f;
+    font-family: 'Poppins', sans-serif;
+    font-size: 0.6rem;
+    font-weight: 500;
+    line-height: 1.2;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.9);
+  }
+
 
 .field-overlay {
   z-index: 10;
   min-width: 0;
 }
 
-/* Read-only rendering used by the preview overlay — plain baked-in text,
+/* Read-only rendering used by the preview overlay â€” plain baked-in text,
    nothing focusable or clickable, so it matches the generated card exactly. */
 .field-static {
   pointer-events: none;
 }
 
+/* Vertically centred, because that is where the labels baked into the card art
+   sit. The card art prints each field name to the left of its box, centred on
+   the same line as the value, so a value that starts at the top of its box
+   sits above its own title. An <input> centres its one line natively and
+   .card-select-trigger centres via flex, so this is what makes the read-only
+   render — the preview, and every readOnly field in the editor — line up with
+   them, and utils/cardRender.js centres its line block to match. */
 .field-static-text {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   width: 100%;
   height: 100%;
   padding: 0 0.15rem;
   overflow: hidden;
   white-space: pre-wrap;
+  /* A <textarea> breaks a run with no spaces in it — an email address is the
+     case that matters here — and the export's wrapLines now breaks the same
+     runs. Without this the preview would let one run off the right edge while
+     the other two wrapped it. */
+  overflow-wrap: break-word;
+}
+
+/* Placeholder for a readOnly field still being assigned by the server (see
+   memberId in config/template.js). Same dimming as .field-input::placeholder,
+   so it reads as UI state rather than as card content — the canvas export skips
+   empty values, so a hint never ends up in the download. */
+.field-static-text.is-auto-hint {
+  opacity: 0.32;
+}
+
+/* .field-static-text wraps by default so a multiline field can. A field the
+   editor renders as a plain <input> cannot wrap, so it must not here either,
+   or the preview and the editor diverge for any value too long to fit. */
+.field-static-text.is-nowrap {
+  white-space: pre;
+}
+
+/* Counterpart to .field-multiline for the read-only render: a multiline field is
+   pinned to the top of its box so its first line meets the printed label, while
+   single-line fields stay centred on theirs. */
+.field-static-text.is-top {
+  justify-content: flex-start;
 }
 
 .field-input {
@@ -251,6 +304,24 @@
 .field-input:hover,
 .field-input:focus {
   border-bottom-color: rgba(123, 196, 189, 0.95);
+}
+
+/* A <textarea> fills its box and pins its first line to the top of it, which is
+   what the wrapper exists to arrange: the card art prints a multiline field's
+   label beside its FIRST line, so the block is top-aligned rather than centred
+   the way a single-line field is. Letting the box hug its content and pinning it
+   to the top gets the editor, the preview and the export onto the same line.
+   The wrapper forwards clicks so the whole field stays focusable. */
+.field-multiline {
+  display: flex;
+  align-items: flex-start;
+  height: 100%;
+}
+
+.field-multiline-input {
+  height: auto;
+  min-height: 0;
+  max-height: 100%;
 }
 
 .field-input:focus {
@@ -319,7 +390,7 @@
   transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* Soft circular badge behind the chevron — reads as a deliberate control
+/* Soft circular badge behind the chevron â€” reads as a deliberate control
    rather than a bare arrow, and darkens on hover/open for feedback. */
 .card-select-caret-ring {
   fill: rgba(123, 196, 189, 0.16);
@@ -374,7 +445,8 @@
   color: #b43c3c;
 }
 
-.field-overlay.has-error .field-input {
+.field-overlay.has-error .field-input,
+.field-overlay.has-error .field-static-text {
   border-bottom-color: #ef6b6b;
   color: #b43c3c;
 }
@@ -406,6 +478,287 @@
   box-shadow: 0 30px 80px rgba(12, 47, 56, 0.35);
 }
 
+/* --- Card action buttons ---------------------------------------------------
+   One pill component covers the editor's action row and the preview modal's
+   footer (see ui/CardActionButton). Height and radius are fixed here rather
+   than left to padding utilities, because the icon-only Preview button has to
+   sit on exactly the same baseline as the labelled Flip and Submit pills
+   beside it.
+
+   These rules are unlayered for the same reason .btn-green is: they have to
+   win against Tailwind's layered utilities wherever the two overlap. */
+.card-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+}
+
+.card-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0 1.25rem;
+  border: 1px solid rgba(12, 47, 56, 0.15);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #0c2f38;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.card-action-btn:hover:not(:disabled) {
+  border-color: #7bc4bd;
+  background: #ffffff;
+}
+
+.card-action-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.card-action-btn:focus-visible {
+  outline: 2px solid #7bc4bd;
+  outline-offset: 3px;
+}
+
+.card-action-btn:disabled {
+  opacity: 0.5;
+}
+
+/* The icon-only shape: a square of exactly the same height, so it lines up with
+   the labelled pills instead of sitting lower or floating. */
+.card-action-btn--icon {
+  width: 2.75rem;
+  padding: 0;
+}
+
+.card-action-btn__icon {
+  display: grid;
+  place-items: center;
+}
+
+.card-action-btn__icon svg {
+  display: block;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+/* The one filled button: the action the flow is heading towards. */
+.card-action-btn--solid {
+  border-color: transparent;
+  background-color: #7bc4bd;
+  color: #0c2f38;
+  font-weight: 600;
+}
+
+.card-action-btn--solid:hover:not(:disabled) {
+  border-color: transparent;
+  background-color: #9ed4ce;
+}
+
+/* Preview before the card is finished. A dashed edge reads as "not yet"
+   without hiding the glyph, which still has to be legible — the click stays
+   live so it can point at whatever is missing. */
+.card-action-btn--muted {
+  border-style: dashed;
+  color: rgba(12, 47, 56, 0.45);
+}
+
+.card-action-btn--muted:hover:not(:disabled) {
+  color: #0c2f38;
+}
+
+/* "Back to edit": leaves the preview without committing to anything, so it
+   drops the pill entirely and reads as a link. */
+.card-action-btn--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: rgba(12, 47, 56, 0.6);
+  text-decoration: underline;
+}
+
+.card-action-btn--quiet:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: #0c2f38;
+}
+
+/* Tooltip for the icon-only buttons, off the data-tip attribute the component
+   sets from the same `label` that becomes the accessible name. */
+.card-action-btn[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 50%;
+  z-index: 5;
+  transform: translateX(-50%) translateY(0.25rem);
+  width: max-content;
+  max-width: 14rem;
+  border-radius: 999px;
+  background: #0c2f38;
+  padding: 0.3rem 0.65rem;
+  color: #f3f6f5;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.card-action-btn[data-tip] {
+  position: relative;
+}
+
+.card-action-btn[data-tip]:hover::after,
+.card-action-btn[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* --- Preview modal layout --------------------------------------------------
+   Three rows, all the same width so their left and right edges line up, each
+   doing one job:
+
+     1. the side switch      (which face you are looking at)
+     2. the downloads        (teal tinted pair, the reason to be here)
+     3. the decision         (back on the left, submit on the right)
+
+   Rows 2 and 3 are deliberately different families: a tinted matched pair
+   against a hairline-separated left/right choice. The downloads used to be
+   capped narrower than the actions, and the actions were centred, so nothing
+   lined up and the Flip pill read as a third download. */
+.card-preview-card {
+  cursor: none;
+}
+
+.card-preview-card:focus-visible {
+  outline: 2px solid #7bc4bd;
+  outline-offset: 6px;
+  border-radius: 1.25rem;
+}
+
+/* The side switch, replacing the decorative dots in this context. */
+.card-preview-steps {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  border: 1px solid rgba(12, 47, 56, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 0.1875rem;
+}
+
+.card-preview-step {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0.3rem 0.9rem;
+  color: rgba(12, 47, 56, 0.55);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.2;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.card-preview-step:hover {
+  color: #0c2f38;
+}
+
+.card-preview-step.is-active {
+  background-color: #0c2f38;
+  color: #f3f6f5;
+  font-weight: 600;
+}
+
+.card-preview-step:focus-visible {
+  outline: 2px solid #7bc4bd;
+  outline-offset: 2px;
+}
+
+.card-preview-downloads {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+@media (min-width: 30rem) {
+  .card-preview-downloads {
+    flex-direction: row;
+  }
+
+  /* Equal halves, so the two formats read as a matched set rather than one
+     button looking more important than the other. */
+  .card-preview-downloads > * {
+    flex: 1 1 0;
+  }
+}
+
+.card-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  width: 100%;
+  border-top: 1px solid rgba(12, 47, 56, 0.08);
+  padding-top: 1rem;
+}
+
+/* Labelled rather than icon-only: PNG and PDF differ by format, not by
+   gesture, and there is room here to say which side a PNG will contain.
+   The teal tint sets this pair apart from the plain action pills, so a
+   download never gets mistaken for a navigation button. */
+.card-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  border: 1px solid rgba(123, 196, 189, 0.55);
+  border-radius: 999px;
+  background: rgba(123, 196, 189, 0.2);
+  padding: 0 1.1rem;
+  color: #0c2f38;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.card-download-btn:hover:not(:disabled) {
+  border-color: #7bc4bd;
+  background: rgba(123, 196, 189, 0.34);
+}
+
+.card-download-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.card-download-btn:focus-visible {
+  outline: 2px solid #7bc4bd;
+  outline-offset: 3px;
+}
+
+.card-download-btn:disabled {
+  opacity: 0.55;
+}
+
+.card-download-btn svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: none;
+}
 .card-cursor {
   position: fixed;
   top: 0;
@@ -496,9 +849,9 @@
 
 /* --- Green action buttons --------------------------------------------------
    Colours taken from the card art in public/templates:
-     #0c2f38  ink      — the card's deep field
-     #f3f6f5  paper    — off-white
-     #7bc4bd  teal     — the light teal ring/streak colour
+     #0c2f38  ink      â€” the card's deep field
+     #f3f6f5  paper    â€” off-white
+     #7bc4bd  teal     â€” the light teal ring/streak colour
    .btn-green is the flat variant used where there is no ring; it takes the
    teal directly. Shape, padding and animation are unchanged. */
 .btn-green,
@@ -527,7 +880,7 @@
 }
 
 /* --- Interactive glow button (Login / Sign up / Make your own ID) --------
-   The pill is a flat dark green. Nothing glows and nothing darkens at rest —
+   The pill is a flat dark green. Nothing glows and nothing darkens at rest â€”
    the surface is one solid colour. On hover/focus a soft teal glow fades in
    at the exact spot the pointer is on, and nothing else about the button
    changes. Position is tracked in JS (AnimatedButton.jsx) and passed in via
@@ -602,7 +955,7 @@
   /* Grows the pill's real width on hover, so the flex row re-lays out around
      it: the sibling is pushed aside with the gap intact, and the row's
      justify-content:center re-centres the pair. A transform-scale cannot do
-     this — it widens the button on screen without moving anything else. */
+     this â€” it widens the button on screen without moving anything else. */
   transition: padding-inline 220ms cubic-bezier(0.45, 0, 0.55, 1);
 }
 
@@ -615,8 +968,8 @@
 
 /* Border-only variant: same pill geometry, padding and hover growth, but no
    fill. Used for secondary actions (Sign out) so they sit beside a primary
-   .glow-btn without competing with it. The inner ::before glow still paints —
-   the pill is transparent but establishes a stacking context — so the touch
+   .glow-btn without competing with it. The inner ::before glow still paints â€”
+   the pill is transparent but establishes a stacking context â€” so the touch
    light still tracks the pointer exactly as it does on the filled button. */
 .glow-btn--ghost .glow-btn__inner {
   background-color: transparent;

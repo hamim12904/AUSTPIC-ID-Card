@@ -15,9 +15,10 @@ export async function uploadPhoto(id, file, cropRect) {
   const form = new FormData();
   form.append('photo', file);
   form.append('cropRect', JSON.stringify(cropRect));
-  const { data } = await client.post(`/submissions/${id}/photo`, form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Content-Type is left to axios on purpose: a multipart header has to carry
+  // the boundary, and setting it by hand drops the boundary along with the file
+  // the server is trying to read.
+  const { data } = await client.post(`/submissions/${id}/photo`, form, { timeout: 60000 });
   return data;
 }
 

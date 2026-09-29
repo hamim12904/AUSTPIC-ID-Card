@@ -2,6 +2,7 @@ import { User } from '../models/user.js';
 import { signToken } from '../utils/jwt.js';
 import { BLOOD_GROUPS, DEPARTMENTS } from '../utils/constants.js';
 import { ApiError } from '../middleware/errorHandler.js';
+import { ensureMemberId } from './memberController.js';
 
 // Mirrors src/utils/validation.js so server and client reject the same input
 // with the same wording; the frontend pre-checks so users rarely see these.
@@ -82,6 +83,11 @@ export async function signup(req, res, next) {
     // pre-fill the card from the signup response without a second request.
     const user = await User.create({ name, email, password, ...profile });
 
+    // The member id is allocated here rather than on demand, so the card can
+    // read it off this same payload instead of making a second request that
+    // could fail and leave the member with an unfillable blank field.
+    await ensureMemberId(user);
+
     res.status(201).json({ token: signToken(user), user: user.toJSON() });
   } catch (err) {
     next(err);
@@ -106,6 +112,10 @@ export async function login(req, res, next) {
     const ok = user ? await user.verifyPassword(password) : false;
     if (!ok) throw ApiError.invalidCredentials();
 
+    // Normally a no-op, since signup already allocated one. It covers accounts
+    // created before that, so signing in is enough to backfill a missing id.
+    await ensureMemberId(user);
+
     res.json({ token: signToken(user), user: user.toJSON() });
   } catch (err) {
     next(err);
@@ -115,6 +125,9 @@ export async function login(req, res, next) {
 /** GET /api/auth/me -> { user } — lets the client re-hydrate on page load. */
 export async function me(req, res, next) {
   try {
+    // Same backfill as login, so a member reloading the page always gets their
+    // member id back rather than having to sign in again.
+    await ensureMemberId(req.user);
     res.json({ user: req.user.toJSON() });
   } catch (err) {
     next(err);

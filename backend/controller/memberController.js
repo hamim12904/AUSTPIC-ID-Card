@@ -21,36 +21,57 @@ async function burnNextSequence() {
 }
 
 /**
+ * Allocates this user's member id if they don't have one yet, and returns it.
+ *
+ * Idempotent: an account that already has an id keeps it, so calling this on
+ * every sign-in is free and can't renumber anybody. Two concurrent calls may
+ * each burn a sequence, but the `$set` guard means only one id is ever
+ * persisted and both callers get that same one back.
+ *
+ * Used by authController so `memberId` is always present in the signup / login /
+ * me payload — the card reads it straight off the user document, with no second
+ * request that could fail and leave the card stuck.
+ */
+export async function ensureMemberId(user) {
+  if (!user) return undefined;
+  if (user.memberId) return user.memberId;
+
+  const candidate = await burnNextSequence();
+  const claimed = await User.findOneAndUpdate(
+    { _id: user._id, memberId: { $exists: false } },
+    { $set: { memberId: candidate } },
+    { returnDocument: 'after' }
+  );
+
+  // Lost the race: re-read to return the id the winner persisted.
+  const memberId = claimed?.memberId ?? (await User.findById(user._id))?.memberId;
+  if (!memberId) throw new Error('Failed to allocate a member id.');
+
+  // findOneAndUpdate returns a separate document, so mirror the id onto the
+  // caller's instance. authController serialises that instance straight into
+  // its response, and without this the freshly created user would go out with
+  // no memberId despite the database having one.
+  user.memberId = memberId;
+  return memberId;
+}
+
+/**
  * GET /api/members/next-id -> { memberId }
  *
- * Allocation is idempotent per user: the id is persisted on the user document
- * and returned unchanged on every later call, so refreshing the page or
- * retrying the request can't burn a new number. Two concurrent first requests
- * may each burn a sequence, but the `$set` guard means only one id is ever
- * persisted and both callers receive that same id.
+ * A fallback for the card. Signup and login already return the id on the user
+ * document, so this only does real work for accounts created before that, and
+ * for a client whose stored profile is missing it.
  */
 export async function getNextMemberId(req, res, next) {
   try {
     const user = await User.findById(req.user._id);
 
     if (!user) throw ApiError.unauthorized('That account no longer exists.');
-    if (user.memberId) return res.json({ memberId: user.memberId });
 
-    const candidate = await burnNextSequence();
-    const claimed = await User.findOneAndUpdate(
-      { _id: user._id, memberId: { $exists: false } },
-      { $set: { memberId: candidate } },
-      { returnDocument: 'after' }
-    );
-
-    // Lost the race: re-read to return the id the winner persisted.
-    const memberId = claimed?.memberId ?? (await User.findById(user._id))?.memberId;
-    if (!memberId) throw new Error('Failed to allocate a member id.');
-
-    return res.json({ memberId });
+    return res.json({ memberId: await ensureMemberId(user) });
   } catch (err) {
     return next(err);
   }
 }
 
-export default { getNextMemberId };
+export default { getNextMemberId, ensureMemberId };

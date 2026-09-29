@@ -1,39 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCardStore } from '../../store/useCardStore.js';
-import { PHOTO_FIELD } from '../../config/template.js';
+import { getPhotoGeometry, photoCornerRadius as radius } from '../../config/photoGeometry.js';
 import PhotoCropModal from './PhotoCropModal.jsx';
 
-// Accepts the nested { x, y, width, height } rects from config/template.js as
-// well as the old flat { x, y, w, h } the backend template still returns, so
-// the photo slot keeps working whichever config is live.
-function readRect(source) {
-  if (!source) return null;
-  const width = source.width ?? source.w;
-  const height = source.height ?? source.h;
-  if (width == null || height == null) return null;
-  return {
-    x: source.x ?? 0,
-    y: source.y ?? 0,
-    width,
-    height,
-    shape: source.shape ?? 'circle',
-  };
-}
-
-const radius = (shape) => (shape === 'circle' ? '50%' : '0.5rem');
-
-export default function PhotoUploadZone({ photo, photoField }) {
+export default function PhotoUploadZone({ photo, photoField, readOnly = false }) {
   const inputRef = useRef(null);
   const [rawFile, setRawFile] = useState(null);
   const [rawUrl, setRawUrl] = useState(null);
   const [cropModalOpen, setCropModalOpen] = useState(false);
   const previewUrl = useCardStore((s) => s.photo.previewUrl);
   const processedUrl = useCardStore((s) => s.photo.processedUrl);
+  // The upload is a network round trip, so the slot has to say so: without it
+  // "Use photo" looks instantaneous and the member cannot tell a still-uploading
+  // picture from a stored one, or re-pick a photo that already failed.
+  const status = useCardStore((s) => s.photo.status);
+  const uploadError = useCardStore((s) => s.photo.error);
 
-  const image = readRect(photo?.image) || readRect(photoField) || PHOTO_FIELD.image;
-  const overlayRect = readRect(photo?.overlay) || readRect(PHOTO_FIELD.overlay);
-  const overlayImage = photo?.overlayImage ?? PHOTO_FIELD.overlayImage;
-  const placeholderImage = photo?.placeholderImage ?? PHOTO_FIELD.placeholderImage;
+  const { image, overlay, overlayImage, placeholderImage } = getPhotoGeometry({ photo, photoField });
 
   // hasPhoto tracks a real user upload; photoUrl is what actually gets shown,
   // falling back to the blank so the slot is never empty.
@@ -59,11 +42,24 @@ export default function PhotoUploadZone({ photo, photoField }) {
   // photo (z-index 2) and below the hover label (z-index 3).
   const overlayStyle = {
     position: 'absolute',
-    left: `${overlayRect.x}%`,
-    top: `${overlayRect.y}%`,
-    width: `${overlayRect.width}%`,
-    height: `${overlayRect.height}%`,
+    left: `${overlay.x}%`,
+    top: `${overlay.y}%`,
+    width: `${overlay.width}%`,
+    height: `${overlay.height}%`,
     zIndex: 2,
+  };
+
+  // Underneath the slot, not over it: an error about the picture must never
+  // cover the picture. Positioned off the slot's own rect so it tracks the
+  // template geometry wherever the photo sits.
+  const errorStyle = {
+    position: 'absolute',
+    left: `${image.x}%`,
+    top: `${image.y + image.height + 1}%`,
+    width: `${image.width}%`,
+    zIndex: 3,
+    margin: 0,
+    textAlign: 'center',
   };
 
   const handleFileChange = (event) => {
@@ -83,15 +79,51 @@ export default function PhotoUploadZone({ photo, photoField }) {
     if (rawUrl) URL.revokeObjectURL(rawUrl);
   }, [rawUrl]);
 
+  // Read-only is the preview's mode: the picture is shown exactly as it will
+  // print, but there is no button, no hidden file input and no crop modal. The
+  // preview card is clickable (a double-click turns it over), so leaving a
+  // live <button> here would mean clicking the photo opened a file picker.
+  if (readOnly) {
+    return (
+      <>
+        <div style={style} className="photo-upload-zone" aria-hidden="true">
+          {photoUrl && (
+            <img
+              src={photoUrl}
+              alt=""
+              className="photo-preview-image"
+              style={{ borderRadius: radius(image.shape), zIndex: 1 }}
+              draggable={false}
+            />
+          )}
+        </div>
+        {overlayImage && (
+          <img
+            src={overlayImage}
+            alt=""
+            className="photo-overlay-image"
+            style={overlayStyle}
+            draggable={false}
+            aria-hidden="true"
+          />
+        )}
+      </>
+    );
+  }
+
+  const uploading = status === 'uploading';
+
   return (
     <>
       <button
         type="button"
         data-card-input="true"
-        aria-label={hasPhoto ? 'Change photo' : 'Upload photo'}
+        aria-label={uploading ? 'Uploading photo' : hasPhoto ? 'Change photo' : 'Upload photo'}
+        aria-busy={uploading}
         onClick={() => inputRef.current?.click()}
         style={style}
         className="photo-upload-zone group flex items-center justify-center"
+        disabled={uploading}
       >
         {photoUrl && (
           <img
@@ -103,9 +135,17 @@ export default function PhotoUploadZone({ photo, photoField }) {
           />
         )}
         <span className="photo-upload-label">
-          {hasPhoto ? 'Change photo' : 'Add photo'}
+          {uploading ? 'Uploading…' : hasPhoto ? 'Change photo' : 'Add photo'}
         </span>
       </button>
+      {/* The failure has to survive the crop modal closing over it, and the
+          label above only shows on hover. Pinned under the slot instead, where
+          the member reads the photo. */}
+      {uploadError && (
+        <p className="photo-upload-error" style={errorStyle} role="alert">
+          {uploadError}
+        </p>
+      )}
       {overlayImage && (
         <img
           src={overlayImage}
